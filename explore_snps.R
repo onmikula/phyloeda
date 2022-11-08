@@ -63,21 +63,20 @@ palette <- c(Cape="#e6194b", Struisbaai="#f58231", Oudshoorn="#3cb44b", KwaZuluN
 # elbow method of Salvador & Chan (2004) is used to determine number of PCs to be retained (k)
 # PS scores are displayed for PC1-2, for all pairs of PC1-k and then used for UPGMA clustering
 
-binary <- make_binary_snps(concatenate(usnps), center=TRUE, format="snps", onerowperind=TRUE, allele="_A[[:digit:]]$")
-counts <- count_binary_snps(binary)
-pca <- prcomp(counts, center=FALSE, scale.=FALSE)
-pcs <- pca$x
+binary <- make_binary_snps(concatenate(usnps), center=FALSE, format="snps", onerowperind=TRUE, allele="_A[[:digit:]]$")
+dst <- dissim.snps(binary)
+pcoa <- cmdscale(dst, eig=TRUE)
+k <- elbow(pcoa$eig[pcoa$eig > 0])$best
+pcs <- cmdscale(dst, k=k)
+
 bg <- palette[info$Lineage[match(rownames(pcs), info$ddRAD)]]
-k <- elbow(pca$sdev^2)$best
 
 par(mai=c(1.02,1.02,0.42,0.42))
 plot(pcs, pch=21, cex=2, bg=bg, cex.lab=1.5, cex.axis=1.25)
-legend("topleft", legend=names(palette), pch=21, pt.bg=palette, pt.cex=2, bty="n")
+legend("topright", legend=names(palette), pch=21, pt.bg=palette, pt.cex=2, bty="n")
 
 pairs(pcs[,1:k], pch=21, cex=2, bg=bg, lwd=0.5)
 
-clust <- hclust(dist(pcs[,1:k], method="manhattan"), method="average")
-plot(clust)
 
 
 ### STRUCTURE
