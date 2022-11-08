@@ -1,0 +1,1 @@
+The results of analyses are to be saved into this folder.
