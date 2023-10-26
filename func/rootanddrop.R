@@ -1,4 +1,4 @@
-rootanddrop <- function(phy, outgroup) {
+rootanddrop <- function(phy, outgroup="outgroup") {
 	rad <- function(phy, outgroup) {
 		outgroups <- phy$tip.label[sapply(outgroup, grep, x=phy$tip.label)]
 		phy <- ape::root(phy, outgroup=outgroups, resolve.root=TRUE)
