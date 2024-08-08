@@ -1,5 +1,7 @@
 # phyloeda
-An R package for exploratory analyses of phylogenetic / phylogeographic data.
+R package for exploratory analyses of phylogenetic and phylogeographic data.
+
+Currently, it is focused on molecular barcode sequences and single nucleotide polymorphism (SNP) data. 
 
 **Installation:**
 
