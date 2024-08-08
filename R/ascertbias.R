@@ -1,0 +1,168 @@
+#' Ascertainment bias.
+#' 
+#' @description
+#' Calculates statistics helping to detect of ascertainment bias due to different occupancy across loci.
+#'
+#' @param loci a list of locus-specific sequence alignments of class `matrix` or `DNAbin`.
+#' @param info a data frame or matrix listing individual labels (1st column) and group labels (2nd column).
+#' @param allele regular expression, allele identifier in rownames of locus-specific alignments.
+#' @param thin a proportion of loci to be retained or a subsampling frequency (if `thin > 1`).
+#' @returns A list with components `occupancy` (proportion of successfully sequenced individuals),
+#'   `mdist` (mean uncorrected genetic distance), `nalleles` (the number of distinct haplotypes),
+#'   `nsnps` (the number of SNPs), `npis` (the number of parsimony-informative SNPs),
+#'   `heterozygosity` (mean heterozygosity), `groccupancy` (proportion of species or other taxa represented
+#'   at the locus), `mintra` (mean intra-specific uncorrected genetic distance) and `thin` (the `thin` argument).
+#'   The components are numeric vectors of the same length as the number of loci after thinning.
+#' @export
+
+ascertbias <- function(loci, info, allele="_[012]$", thin=1) {
+
+	loci <- loci[sapply(loci, nrow) > 0]
+	if (thin != 1) {
+		loci <- thinning(loci, freq=thin)
+	}
+    if (inherits(loci[[1]], "matrix")) {
+        loci <- lapply(loci, ape::as.DNAbin)
+    }
+
+	occ <- occupancy(loci)
+	dst <- lapply(loci, ape::dist.dna, model="raw", pairwise.deletion=TRUE)
+	nalleles <- setNames(rep(1, length(loci)), names(loci))
+	nsnps <- matrix(0, length(loci), 2, dimnames=list(names(loci), c("snp", "pis")))
+	mdist <- setNames(rep(NA, length(loci)), names(loci))
+	hetzyg <- setNames(rep(0, length(loci)), names(loci))
+	for (i in seq_along(loci)) {
+		loci[[i]] <- loci[[i]][order(rownames(loci[[i]])),,drop=FALSE]
+		mdist[i] <- mean(dst[[i]], na.rm=TRUE)
+		snps <- find_snps(loci[[i]])
+		nsnps[i,"snp"] <- length(snps$snp)
+		if (nsnps[i,"snp"] > 0) {
+			varsites <- toupper(loci[[i]])[,snps$snp,drop=FALSE]
+			varsites[!varsites %in% c("A","C","G","T")] <- "N"
+			nsnps[i,"pis"] <- sum(snps$pis)
+			un <- unique(varsites)
+			un <- un[order(rowSums(un == "N")),,drop=FALSE]		
+			rows <- unname(apply(un != "N", 1, all))
+			for (j in which(!rows)) {
+				subs <- un[c(j, which(rows)),,drop=FALSE]
+				subs <- subs[,colSums(subs == "N") == 0,drop=FALSE]
+				rows[j] <- !duplicated(subs, fromLast=TRUE)[1]
+			}
+			nalleles[i] <- sum(rows, na.rm=TRUE)
+			varsites <- varsites[grepl(allele, rownames(varsites)),,drop=FALSE]
+			if (nrow(varsites) >= 2) {
+				odd <- seq(nrow(varsites)) %% 2 == 1
+				hetzyg[i] <- sum(varsites[odd,] != varsites[!odd,]) / sum(varsites[odd,] != "N" & varsites[!odd,] != "N")
+				if (hetzyg[i] == Inf) {
+					hetzyg[i] <- NA
+				}
+			} else {
+				hetzyg[i] <- NA
+			}
+		}
+ 	}
+
+	group <- !missing(info)
+	if (isTRUE(group)) {
+		grocc <- groccupancy(loci, info, allele)
+		seqnam <- sort(unique(unname(unlist(lapply(loci, rownames)))))
+		groups <- info[match(sub(allele, "", seqnam), info[,1]),2]
+		dst <- lapply(dst, as.matrix)
+        mintra <- setNames(rep(NA, length(loci)), names(loci))
+ 		for (i in seq_along(loci)) {
+ 			grp <- groups[match(rownames(dst[[i]]), seqnam)]
+            intra <- !diag(length(grp)) & outer(grp, grp, "==")
+            if (any(intra == TRUE)) {
+                mintra[i] <- mean(dst[[i]][intra], na.rm=TRUE)
+            } 			
+ 		}
+ 	} else {
+		grocc <- NULL
+        mintra <- NULL
+	}
+	
+	result <- list(occupancy=occ, mdist=mdist, nalleles=nalleles, nsnps=nsnps[,"snp"], npis=nsnps[,"pis"], heterozygosity=hetzyg, groccupancy=grocc, mintra=mintra, thin=thin)
+	return(result)
+	
+}
+
+
+
+#' Ascertainment bias plot.
+#' 
+#' @description
+#' Plots results of the ascertainment bias analysis.
+#'
+#' @param x string, a name of x-axis variable, e.g. 'occupancy'.
+#' @param y string, a name of y-axis variable, e.g. 'mdist'.
+#' @param ascert output of [ddrad_ascertbias].
+#' @param cumulative logical, whether to plot statistics for increasingly filtered sets of loci
+#'   rather than for different occupancy bins. The default is `TRUE`.
+#' @param xlab,ylab,main labels of axes and the whole plot.
+#' @param cex,cex.lab,cex.axis size of points, axis labels and tick labels.
+#' @param return logical, whether to return a list with binned statistics (`classes`), their medians (`medians`),
+#'   break points between bins (`breaks`) and the numbers of loci contained in the bins (`nloci`).
+#' @param device either `"quartz"`, `"x11"` (= `"X11"`) or `"pdf"`.
+#' @param file character strigm the name of pdf file if `device == "pdf"`.
+#' @export
+
+plot_ascertbias <- function(x, y, ascert, cumulative=TRUE, xlab="", ylab="", main="", cex=1.5, cex.lab=1.5, cex.axis=1.25, return=FALSE, device, file) {
+	
+	makebreaks <- function(ascert, what) {
+		breaks <- c(seq(0, 1, by=0.05), 1.0000001)
+		bins <- .bincode(ascert[[what]], breaks, right=FALSE)
+		binlab <- sort(unique(bins))
+		breaks <- breaks[binlab]
+		names(breaks) <- formatC(breaks, format="f", digit=2)
+		return(list(breaks=breaks, bins=bins, n=length(breaks)))
+	}
+	
+	bpts <- makebreaks(ascert, what=x)
+	classes <- split(ascert[[y]], bpts$bins)
+	if (isTRUE(cumulative)) {
+		for (i in (length(classes)-1):1) {
+			classes[[i]] <- c(classes[[i]], classes[[i+1]])
+		}
+	}
+	medians <- sapply(classes, median, na.rm=TRUE)
+	nloci <- round(ascert$thin * sapply(classes, length))
+	xlim <- c(0.5, bpts$n+0.5)
+	ylim <- range(ascert[[y]], na.rm=TRUE)
+
+	if (missing(device)) {
+		device <- ifelse(.Platform$OS.type == "unix", "quartz", "x11")
+	}
+	if (isTRUE(device == "pdf") & missing(file)) {
+		file <- "ascertbias.pdf"
+	}
+	if (isTRUE(device == "pdf")) {
+		pdf(file, width=7, height=7)
+	} else {
+		match.fun(tolower(device))(width=7, height=7)	
+	}
+
+	par(mar=c(5.1,4.1,3.1,4.1))
+	plot(seq(bpts$n), medians, xlim=xlim, ylim=ylim, xlab="", ylab="", main=main, type="n", xaxt="n", cex.axis=cex.axis)
+	axis(1, at=seq(bpts$n), labels=names(bpts$breaks), cex.axis=cex.axis)
+	mtext(xlab, side=1, line=3, cex=cex.lab)
+	mtext(ylab, side=2, line=2.25, cex=cex.lab)
+	mtext("no. of loci", side=4, line=2.25, cex=cex.lab)
+	for (i in seq(bpts$n)) {
+		tryCatch(vioplot::vioplot(classes[[i]], add=TRUE, pchMed=NA, at=i), error=function(e) NULL)
+	}
+	points(seq(bpts$n), medians, pch=21, bg="white", col="black", cex=cex)
+	zlim <- range(nloci)
+	ratio <- diff(ylim) / diff(zlim)
+	rescaled <- ratio * (nloci - zlim[1]) + ylim[1]
+	at <- axTicks(4, c(zlim, 5))
+	axis(4, at=ratio * (at - zlim[1]) + ylim[1], labels=at, las=3, cex.axis=0.9*cex.axis)
+	points(seq(bpts$n), rescaled, pch=21, col=3, bg=3, cex=cex)
+	if (isTRUE(return)) {
+		return(list(medians=medians, classes=classes, breaks=bpts, nloci=nloci))
+	}
+
+	if (isTRUE(device == "pdf")) {
+		invisible(dev.off())
+	}
+
+}
